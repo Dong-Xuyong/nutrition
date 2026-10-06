@@ -686,18 +686,23 @@
   }
 
   function pull() {
+    var nutritionErr = null;
+    var streetErr = null;
+    var nutritionP;
+    var streetP;
     loading = true;
-    GhSync.load("nutrition", apply).then(function () {
-      return loadStreetlifting();
-    }).then(function () {
+    nutritionP = GhSync.load("nutrition", apply).then(function () {}, function (err) {
+      nutritionErr = err;
+    });
+    streetP = loadStreetlifting().then(function () {}, function (err) {
+      streetErr = err;
+    });
+    Promise.all([nutritionP, streetP]).then(function () {
+      var err = nutritionErr || streetErr;
       loading = false;
       showConnect();
-      els.sync.textContent = "Synced " + hhmm();
-      render();
-    }, function (err) {
-      loading = false;
-      showConnect();
-      els.sync.textContent = err && err.message ? err.message : String(err);
+      if (err) els.sync.textContent = err && err.message ? err.message : String(err);
+      else els.sync.textContent = "Synced " + hhmm();
       render();
     });
   }

@@ -416,6 +416,40 @@
     return out;
   }
 
+  function sleepHours(day) {
+    var value = day && day.vitals ? day.vitals.sleepHours : undefined;
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+    return null;
+  }
+
+  function sleepSeries(days, endKey, n) {
+    var map = days || {};
+    var keys = keysEnding(endKey, n);
+    var out = [];
+    for (var i = 0; i < keys.length; i++) {
+      out.push({
+        key: keys[i],
+        hours: sleepHours(map[keys[i]])
+      });
+    }
+    return out;
+  }
+
+  function sleepStreak(days, goal, endKey) {
+    if (typeof goal !== "number" || !Number.isFinite(goal) || goal <= 0) return 0;
+    var map = days || {};
+    var key = endKey;
+    if (sleepHours(map[key]) === null) key = shift(key, -1);
+    var count = 0;
+    for (var i = 0; i < 3660; i++) {
+      var hours = sleepHours(map[key]);
+      if (hours === null || hours < goal) break;
+      count += 1;
+      key = shift(key, -1);
+    }
+    return count;
+  }
+
   var NutritionCore = {
     MEALS: MEALS,
     blankStore: blankStore,
@@ -430,7 +464,9 @@
     series: series,
     insights: insights,
     weightTrend: weightTrend,
-    latestHealth: latestHealth
+    latestHealth: latestHealth,
+    sleepSeries: sleepSeries,
+    sleepStreak: sleepStreak
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -469,4 +505,36 @@ if (typeof module !== "undefined" && require.main === module) {
       assert.notStrictEqual(health[groups[g]][names[n]].key, "2026-10-01");
     }
   }
+
+  var sleepDays = {
+    "2026-10-01": { vitals: { sleepHours: 8 } },
+    "2026-10-02": { vitals: { sleepHours: 8.5 } },
+    "2026-10-03": { vitals: { sleepHours: 9 } },
+    "2026-10-04": { vitals: { sleepHours: 6 } },
+    "2026-10-05": { vitals: { sleepHours: 8 } },
+    "2026-10-06": { vitals: { sleepHours: 8 } }
+  };
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-03"), 3);
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-04"), 0);
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-06"), 2);
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-07"), 2);
+
+  var gappedSleep = {};
+  var sleepKeyList = Object.keys(sleepDays);
+  var si;
+  for (si = 0; si < sleepKeyList.length; si++) {
+    gappedSleep[sleepKeyList[si]] = sleepDays[sleepKeyList[si]];
+  }
+  delete gappedSleep["2026-10-02"];
+  assert.strictEqual(NutritionCore.sleepStreak(gappedSleep, 8, "2026-10-03"), 1);
+
+  var sleepWindow = NutritionCore.sleepSeries(sleepDays, "2026-10-03", 3);
+  assert.strictEqual(sleepWindow.length, 3);
+  assert.strictEqual(sleepWindow[0].hours, 8);
+  assert.strictEqual(sleepWindow[1].hours, 8.5);
+  assert.strictEqual(sleepWindow[2].hours, 9);
+
+  var emptySleep = NutritionCore.sleepSeries({}, "2026-10-03", 2);
+  assert.strictEqual(emptySleep[0].hours, null);
+  assert.strictEqual(emptySleep[1].hours, null);
 }
