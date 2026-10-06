@@ -548,14 +548,23 @@ details[open] > summary .chev {
   font-family: var(--font-sans);
 }
 
-.chart .weigh-line { stroke: hsl(152 55% 40%); }
-.chart .average-line { stroke: hsl(221 83% 53%); }
-.chart .start-line { stroke: hsl(42 80% 46%); }
-.chart .goal-line { stroke: hsl(4 70% 52%); }
-.chart .weigh-dot { fill: hsl(152 55% 40%); }
-.chart .bar-deficit { fill: hsl(152 55% 40%); }
-.chart .bar-surplus { fill: hsl(4 75% 55%); }
+.chart .weigh-line { stroke: hsl(152 55% 36%); }
+.chart .average-line { stroke: hsl(221 83% 48%); }
+.chart .start-line { stroke: hsl(42 80% 42%); }
+.chart .goal-line { stroke: hsl(4 70% 48%); }
+.chart .weigh-dot { fill: hsl(152 55% 36%); }
+.chart .bar-deficit { fill: hsl(152 55% 38%); }
+.chart .bar-surplus { fill: hsl(4 75% 52%); }
 .chart .zero-line { stroke: var(--text-dim); }
+
+html.dark .chart .weigh-line,
+html.dark .chart .weigh-dot { stroke: hsl(152 52% 64%); fill: hsl(152 52% 64%); }
+html.dark .chart .weigh-line { fill: none; }
+html.dark .chart .average-line { stroke: hsl(217 92% 72%); }
+html.dark .chart .start-line { stroke: hsl(42 90% 64%); }
+html.dark .chart .goal-line { stroke: hsl(4 85% 68%); }
+html.dark .chart .bar-deficit { fill: hsl(152 48% 46%); }
+html.dark .chart .bar-surplus { fill: hsl(4 75% 58%); }
 
 .day-strip {
   display: grid;

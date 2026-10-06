@@ -482,7 +482,6 @@
     head.appendChild(node("span", "", name));
     head.appendChild(node("span", "kcal", item.kcal > 0 ? fmt(item.kcal) + " kcal logged" : ""));
     wrap.appendChild(head);
-    if (item.source) wrap.appendChild(node("p", "sets", item.source));
     return wrap;
   }
 
@@ -516,7 +515,10 @@
       fmt(row.targets.calories) + " kcal · " + fmt(row.targets.carbs) + " g carbs"
     ));
     stats.appendChild(stat("Burned", row.exercise.mid > 0 ? NutritionCore.formatKcalRange(row.exercise) : "0 kcal"));
-    stats.appendChild(stat("Deficit", NutritionCore.formatDeficit(row.deficit)));
+    stats.appendChild(stat(
+      "Deficit",
+      row.countsInAverage ? NutritionCore.formatDeficit(row.deficit) : "Not counted"
+    ));
     body.appendChild(stats);
     if (row.strength) {
       var timing = durationText(row.strength);
