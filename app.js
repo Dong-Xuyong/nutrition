@@ -181,7 +181,7 @@
     points.forEach(function (point) {
       if (point && typeof point.weight === "number") vals.push(point.weight);
     });
-    if (vals.length < 2) return null;
+    if (!vals.length) return null;
     min = vals[0];
     max = vals[0];
     vals.forEach(function (w) {
@@ -207,9 +207,24 @@
     }
     points.forEach(function (point, i) {
       var at;
+      var x;
+      var y;
+      var dot;
+      var title;
       if (!point || typeof point.weight !== "number") return;
       at = point.key != null && slot[point.key] != null ? slot[point.key] : i;
-      coords.push(xOf(at, series.length || points.length).toFixed(1) + "," + yOf(point.weight).toFixed(1));
+      x = xOf(at, series.length || points.length);
+      y = yOf(point.weight);
+      coords.push(x.toFixed(1) + "," + y.toFixed(1));
+      dot = svg("circle");
+      title = svg("title");
+      dot.setAttribute("cx", x.toFixed(1));
+      dot.setAttribute("cy", y.toFixed(1));
+      dot.setAttribute("r", "4");
+      dot.setAttribute("fill", GREEN);
+      title.textContent = (point.key ? point.key + " " : "") + kgText(point.weight) + " kg";
+      dot.appendChild(title);
+      board.appendChild(dot);
     });
     board.setAttribute("viewBox", "0 0 300 100");
     poly.setAttribute("fill", "none");
@@ -218,24 +233,10 @@
     poly.setAttribute("stroke-linejoin", "round");
     poly.setAttribute("stroke-linecap", "round");
     poly.setAttribute("points", coords.join(" "));
-    board.appendChild(poly);
+    if (coords.length >= 2) board.insertBefore(poly, board.firstChild);
     if (goalW > 0) board.appendChild(guide(yOf(goalW)));
     wrap.appendChild(board);
     return wrap;
-  }
-
-  function trendText(trend) {
-    var text = "";
-    if (!trend) return "";
-    if (typeof trend.weeklyKg === "number" && isFinite(trend.weeklyKg)) {
-      text = (trend.weeklyKg < 0 ? "losing" : "gaining") + " " + kgText(trend.weeklyKg) + " kg/week";
-    }
-    if (typeof trend.etaDays === "number" && trend.etaDays > 0) {
-      text += (text ? " · " : "") + "about " + fmt(trend.etaDays) + " days to goal";
-    } else if (trend.etaDays === 0) {
-      text += (text ? " · " : "") + "at goal";
-    }
-    return text;
   }
 
   function macroRow(label, total, goal) {
@@ -338,6 +339,24 @@
     });
   }
 
+  function weightHistory(endKey) {
+    var source = store.days && typeof store.days === "object" ? store.days : {};
+    var list = [];
+    Object.keys(source).forEach(function (dayKey) {
+      var w;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey) || dayKey > endKey) return;
+      w = source[dayKey] && source[dayKey].weight;
+      if (typeof w !== "number" || !isFinite(w) || w <= 0) return;
+      list.push({ key: dayKey, weight: w });
+    });
+    list.sort(function (a, b) {
+      if (a.key < b.key) return -1;
+      if (a.key > b.key) return 1;
+      return 0;
+    });
+    return list;
+  }
+
   function bodyHealthCard(key) {
     var specs = {
       body: [
@@ -389,12 +408,8 @@
     };
     var health = typeof NutritionCore.latestHealth === "function" ? NutritionCore.latestHealth(store.days, key) : null;
     var profile = store.profile;
-    var section = card("Body & health");
+    var section = node("details", "card");
     var shown = false;
-    var source = store.days && typeof store.days === "object" ? store.days : {};
-    var weighKey = "";
-    var weigh = null;
-    var goalW = store.goals && store.goals.weight;
 
     function qty(n, unit) {
       var text = String(Math.round(n * 10) / 10);
@@ -413,25 +428,9 @@
       return !!(leaf && typeof leaf === "object" && typeof leaf.value === "number" && isFinite(leaf.value));
     }
 
+    section.appendChild(node("summary", "", "Body & health"));
     if (!health || typeof health !== "object") {
       health = { body: {}, skinfolds: {}, circ: {}, vitals: {}, labs: {} };
-    }
-    Object.keys(source).forEach(function (dayKey) {
-      var w;
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey) || dayKey > key) return;
-      w = source[dayKey] && source[dayKey].weight;
-      if (typeof w !== "number" || !isFinite(w) || w <= 0) return;
-      if (dayKey < weighKey) return;
-      weighKey = dayKey;
-      weigh = w;
-    });
-    if (weigh != null) {
-      shown = true;
-      section.appendChild(row("Weight", qty(weigh, "kg"), weighKey));
-    }
-    if (typeof goalW === "number" && isFinite(goalW) && goalW > 0) {
-      shown = true;
-      section.appendChild(row("Goal", qty(goalW, "kg"), ""));
     }
     if (profile && typeof profile === "object") {
       if (typeof profile.heightCm === "number" && isFinite(profile.heightCm)) {
@@ -505,9 +504,6 @@
     var anyMacro;
     var meals;
     var series;
-    var trend;
-    var points;
-    var weighed;
     var lines;
     var grid;
     var heat;
@@ -608,12 +604,6 @@
 
     series = NutritionCore.series(days, goals, key, range);
     if (!Array.isArray(series)) series = [];
-    trend = NutritionCore.weightTrend(days, goals, key, range) || {};
-    points = Array.isArray(trend.points) ? trend.points : [];
-    weighed = 0;
-    series.forEach(function (dayRow) {
-      if (dayRow && dayRow.weight != null) weighed += 1;
-    });
     (function () {
       var trends = card("Trends");
       var toggle = node("div", "toggle");
@@ -629,19 +619,26 @@
       trends.appendChild(toggle);
       trends.appendChild(node("p", "chart-label", "Calories"));
       trends.appendChild(calorieChart(series, goals.calories > 0 ? goals.calories : 0));
-      if (weighed >= 2 || points.length >= 2) {
-        var plot = points.length >= 2 ? points : series.filter(function (dayRow) {
-          return dayRow && typeof dayRow.weight === "number";
-        });
-        var chart = weightChart(series, plot, goals.weight > 0 ? goals.weight : 0);
-        var caption = trendText(trend);
-        if (chart) {
-          trends.appendChild(node("p", "chart-label", "Weight"));
-          trends.appendChild(chart);
-        }
-        if (caption) trends.appendChild(node("p", "", caption));
-      }
       els.main.appendChild(trends);
+    })();
+
+    (function () {
+      var history = weightHistory(key);
+      var goalN = goals.weight > 0 ? goals.weight : 0;
+      var chart;
+      var last;
+      var box;
+      var caption;
+      if (!history.length) return;
+      chart = weightChart(history, history, goalN);
+      if (!chart) return;
+      box = card("Weight");
+      box.appendChild(chart);
+      last = history[history.length - 1];
+      caption = kgText(last.weight) + " kg · " + last.key;
+      if (goalN > 0) caption += " · goal " + kgText(goalN) + " kg";
+      box.appendChild(node("p", "chart-label", caption));
+      els.main.appendChild(box);
     })();
 
     var healthCard = bodyHealthCard(key);
