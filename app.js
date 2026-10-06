@@ -34,6 +34,7 @@
   };
 
   var store = readStore();
+  var streetlifting = { sessions: {} };
   var range = 7;
   var loading = false;
 
@@ -251,10 +252,248 @@
     return row;
   }
 
+  function finiteNumber(value) {
+    return typeof value === "number" && isFinite(value);
+  }
+
+  function titleCaseSlug(slug) {
+    return String(slug || "")
+      .split("-")
+      .map(function (word) {
+        if (!word) return "";
+        return word.charAt(0).toUpperCase() + word.slice(1);
+      })
+      .filter(function (word) {
+        return word;
+      })
+      .join(" ");
+  }
+
+  function activityLabel(activity) {
+    var name = titleCaseSlug(activity && activity.type);
+    if (activity && finiteNumber(activity.km)) {
+      name = (name ? name + " " : "") + String(activity.km) + " km";
+    }
+    return name;
+  }
+
+  function sessionKcal(session) {
+    var rows = [];
+    var found = false;
+    var activities;
+    var i;
+    var activity;
+    if (!session || typeof session !== "object") return null;
+    if (finiteNumber(session.liftKcal)) {
+      found = true;
+      rows.push({ name: "Strength", kcal: session.liftKcal });
+    }
+    activities = Array.isArray(session.activities) ? session.activities : [];
+    for (i = 0; i < activities.length; i++) {
+      activity = activities[i];
+      if (!activity || typeof activity !== "object" || !finiteNumber(activity.kcal)) continue;
+      found = true;
+      rows.push({ name: activityLabel(activity), kcal: activity.kcal });
+    }
+    return found ? rows : null;
+  }
+
+  function daysForRender() {
+    var days = {};
+    var source = store.days && typeof store.days === "object" ? store.days : {};
+    var sessions =
+      streetlifting && streetlifting.sessions && typeof streetlifting.sessions === "object"
+        ? streetlifting.sessions
+        : {};
+    Object.keys(source).forEach(function (key) {
+      days[key] = source[key];
+    });
+    Object.keys(sessions).forEach(function (key) {
+      var rows = sessionKcal(sessions[key]);
+      var copy = {};
+      var day = source[key];
+      if (!rows) return;
+      if (day && typeof day === "object") {
+        Object.keys(day).forEach(function (name) {
+          copy[name] = day[name];
+        });
+      }
+      copy.exercise = rows;
+      days[key] = copy;
+    });
+    return days;
+  }
+
+  function acceptStreetlifting(remote) {
+    if (remote && typeof remote === "object" && remote.sessions && typeof remote.sessions === "object") {
+      streetlifting = remote;
+      return;
+    }
+    streetlifting = { sessions: {} };
+  }
+
+  function loadStreetlifting() {
+    return GhSync.load("streetlifting", acceptStreetlifting).then(function (msg) {
+      if (msg === "Nothing saved on GitHub yet") streetlifting = { sessions: {} };
+    });
+  }
+
+  function bodyHealthCard(key) {
+    var specs = {
+      body: [
+        ["bodyFat", "Body fat", "%"],
+        ["fatMassKg", "Fat mass", "kg"],
+        ["leanMassKg", "Lean mass", "kg"],
+        ["muscleMassKg", "Muscle mass", "kg"],
+        ["metabolicAge", "Metabolic age", "y"],
+        ["visceralFat", "Visceral fat", ""],
+        ["waterPct", "Body water", "%"]
+      ],
+      skinfolds: [
+        ["triceps", "Triceps", "mm"],
+        ["biceps", "Biceps", "mm"],
+        ["subscapular", "Subscapular", "mm"],
+        ["suprailiac", "Suprailiac", "mm"],
+        ["abdominal", "Abdominal", "mm"],
+        ["supraspinal", "Supraspinal", "mm"],
+        ["thigh", "Thigh", "mm"],
+        ["calf", "Calf", "mm"]
+      ],
+      circ: [
+        ["armRelaxedR", "Arm relaxed R", "cm"],
+        ["armRelaxedL", "Arm relaxed L", "cm"],
+        ["armFlexedR", "Arm flexed R", "cm"],
+        ["armFlexedL", "Arm flexed L", "cm"],
+        ["thighR", "Thigh R", "cm"],
+        ["thighL", "Thigh L", "cm"],
+        ["calfR", "Calf R", "cm"],
+        ["calfL", "Calf L", "cm"],
+        ["waist", "Waist", "cm"],
+        ["glutes", "Glutes", "cm"]
+      ],
+      vitals: [
+        ["restingHr", "Resting HR", "bpm"],
+        ["bpSys", "BP systolic", "mmHg"],
+        ["bpDia", "BP diastolic", "mmHg"],
+        ["sleepHours", "Sleep", "h"]
+      ],
+      labs: [
+        ["glucose", "Glucose", "mmol/L"],
+        ["hba1c", "HbA1c", "%"],
+        ["ldl", "LDL", "mmol/L"],
+        ["hdl", "HDL", "mmol/L"],
+        ["triglycerides", "Triglycerides", "mmol/L"],
+        ["alt", "ALT", "U/L"],
+        ["ast", "AST", "U/L"]
+      ]
+    };
+    var health = typeof NutritionCore.latestHealth === "function" ? NutritionCore.latestHealth(store.days, key) : null;
+    var profile = store.profile;
+    var section = card("Body & health");
+    var shown = false;
+    var source = store.days && typeof store.days === "object" ? store.days : {};
+    var weighKey = "";
+    var weigh = null;
+    var goalW = store.goals && store.goals.weight;
+
+    function qty(n, unit) {
+      var text = String(Math.round(n * 10) / 10);
+      return unit ? text + " " + unit : text;
+    }
+
+    function row(label, amount, date) {
+      var line = node("div", "item");
+      line.appendChild(node("span", "", label));
+      line.appendChild(node("span", "qty", amount));
+      line.appendChild(node("span", "kcal", date || ""));
+      return line;
+    }
+
+    function ok(leaf) {
+      return !!(leaf && typeof leaf === "object" && typeof leaf.value === "number" && isFinite(leaf.value));
+    }
+
+    if (!health || typeof health !== "object") {
+      health = { body: {}, skinfolds: {}, circ: {}, vitals: {}, labs: {} };
+    }
+    Object.keys(source).forEach(function (dayKey) {
+      var w;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey) || dayKey > key) return;
+      w = source[dayKey] && source[dayKey].weight;
+      if (typeof w !== "number" || !isFinite(w) || w <= 0) return;
+      if (dayKey < weighKey) return;
+      weighKey = dayKey;
+      weigh = w;
+    });
+    if (weigh != null) {
+      shown = true;
+      section.appendChild(row("Weight", qty(weigh, "kg"), weighKey));
+    }
+    if (typeof goalW === "number" && isFinite(goalW) && goalW > 0) {
+      shown = true;
+      section.appendChild(row("Goal", qty(goalW, "kg"), ""));
+    }
+    if (profile && typeof profile === "object") {
+      if (typeof profile.heightCm === "number" && isFinite(profile.heightCm)) {
+        shown = true;
+        section.appendChild(row("Height", qty(profile.heightCm, "cm"), ""));
+      }
+      [
+        ["birthYear", "Birth year"],
+        ["sex", "Sex"],
+        ["activity", "Activity"]
+      ].forEach(function (field) {
+        var value = profile[field[0]];
+        var amount = null;
+        if (typeof value === "number" && isFinite(value)) amount = qty(value, "");
+        else if (typeof value === "string" && value.trim()) amount = value.trim();
+        if (amount == null) return;
+        shown = true;
+        section.appendChild(row(field[1], amount, ""));
+      });
+    }
+    [
+      ["Composition", "body"],
+      ["Skinfolds", "skinfolds"],
+      ["Circumferences", "circ"],
+      ["Vitals", "vitals"],
+      ["Labs", "labs"]
+    ].forEach(function (pair) {
+      var group = health[pair[1]];
+      var known = {};
+      var keys = [];
+      var head;
+      if (!group || typeof group !== "object") return;
+      specs[pair[1]].forEach(function (item) {
+        known[item[0]] = item;
+        if (ok(group[item[0]])) keys.push(item[0]);
+      });
+      Object.keys(group).forEach(function (name) {
+        if (!known[name] && ok(group[name])) keys.push(name);
+      });
+      if (!keys.length) return;
+      shown = true;
+      head = node("div", "meal-head");
+      head.appendChild(node("h4", "", pair[0]));
+      section.appendChild(head);
+      keys.forEach(function (name) {
+        var leaf = group[name];
+        var meta = known[name];
+        section.appendChild(row(
+          meta ? meta[1] : name,
+          qty(leaf.value, meta ? meta[2] : ""),
+          typeof leaf.key === "string" ? leaf.key : ""
+        ));
+      });
+    });
+    return shown ? section : null;
+  }
+
   function render() {
     var key = hashKey();
     var today = NutritionCore.dayKey(new Date());
     var goals;
+    var days;
     var day;
     var totals;
     var band;
@@ -273,11 +512,12 @@
     var grid;
     var heat;
     if (!isDayKey(key)) return;
+    days = daysForRender();
     goals = store.goals || {};
-    day = store.days[key] || {};
-    totals = NutritionCore.totals(store.days[key]) || {};
-    band = NutritionCore.score(store.days[key], goals);
-    streak = NutritionCore.streak(store.days, goals, today);
+    day = days[key] || {};
+    totals = NutritionCore.totals(days[key]) || {};
+    band = NutritionCore.score(days[key], goals);
+    streak = NutritionCore.streak(days, goals, today);
     eaten = Number(totals.kcal) || 0;
     net = typeof totals.net === "number" ? totals.net : eaten;
     remaining = goals.calories > 0 ? goals.calories - net : null;
@@ -366,9 +606,9 @@
       els.main.appendChild(exercise);
     }
 
-    series = NutritionCore.series(store.days, goals, key, range);
+    series = NutritionCore.series(days, goals, key, range);
     if (!Array.isArray(series)) series = [];
-    trend = NutritionCore.weightTrend(store.days, goals, key, range) || {};
+    trend = NutritionCore.weightTrend(days, goals, key, range) || {};
     points = Array.isArray(trend.points) ? trend.points : [];
     weighed = 0;
     series.forEach(function (dayRow) {
@@ -404,7 +644,10 @@
       els.main.appendChild(trends);
     })();
 
-    lines = NutritionCore.insights(store.days, goals, key) || [];
+    var healthCard = bodyHealthCard(key);
+    if (healthCard) els.main.appendChild(healthCard);
+
+    lines = NutritionCore.insights(days, goals, key) || [];
     if (lines.length) {
       var insightCard = card("Insights");
       var list = node("ul", "insights");
@@ -425,7 +668,7 @@
       });
       month.appendChild(head);
       (grid.cells || []).forEach(function (cell) {
-        var mark = NutritionCore.score(store.days[cell.key], goals);
+        var mark = NutritionCore.score(days[cell.key], goals);
         var link = document.createElement("a");
         link.href = "#" + cell.key;
         link.textContent = String(parseInt(cell.key.slice(8), 10));
@@ -443,19 +686,22 @@
     if (!remote.goals) remote.goals = NutritionCore.blankStore().goals;
     store = remote;
     persist();
-    render();
   }
 
   function pull() {
     loading = true;
     GhSync.load("nutrition", apply).then(function () {
+      return loadStreetlifting();
+    }).then(function () {
       loading = false;
       showConnect();
       els.sync.textContent = "Synced " + hhmm();
+      render();
     }, function (err) {
       loading = false;
       showConnect();
       els.sync.textContent = err && err.message ? err.message : String(err);
+      render();
     });
   }
 

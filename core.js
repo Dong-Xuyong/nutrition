@@ -370,6 +370,52 @@
     return { points: points, weeklyKg: weeklyKg, etaDays: etaDays };
   }
 
+  function copyFinite(bucket, source, dateKey) {
+    if (!source || typeof source !== "object") return;
+    var names = Object.keys(source);
+    for (var i = 0; i < names.length; i++) {
+      var value = source[names[i]];
+      if (value !== null && typeof value === "object") continue;
+      if (typeof value !== "number" || !Number.isFinite(value)) continue;
+      bucket[names[i]] = { value: value, key: dateKey };
+    }
+  }
+
+  function latestHealth(days, endKey) {
+    var out = {
+      body: {},
+      skinfolds: {},
+      circ: {},
+      vitals: {},
+      labs: {}
+    };
+    if (!days || typeof days !== "object") return out;
+
+    var keys = [];
+    var all = Object.keys(days);
+    for (var i = 0; i < all.length; i++) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(all[i])) continue;
+      if (all[i] <= endKey) keys.push(all[i]);
+    }
+    keys.sort();
+
+    for (var d = 0; d < keys.length; d++) {
+      var dateKey = keys[d];
+      var day = days[dateKey];
+      if (!day || typeof day !== "object") continue;
+      var body = day.body;
+      if (body && typeof body === "object") {
+        copyFinite(out.body, body, dateKey);
+        copyFinite(out.skinfolds, body.skinfolds, dateKey);
+        copyFinite(out.circ, body.circ, dateKey);
+      }
+      copyFinite(out.vitals, day.vitals, dateKey);
+      copyFinite(out.labs, day.labs, dateKey);
+    }
+
+    return out;
+  }
+
   var NutritionCore = {
     MEALS: MEALS,
     blankStore: blankStore,
@@ -383,7 +429,8 @@
     streak: streak,
     series: series,
     insights: insights,
-    weightTrend: weightTrend
+    weightTrend: weightTrend,
+    latestHealth: latestHealth
   };
 
   if (typeof module !== "undefined" && module.exports) {
@@ -393,3 +440,33 @@
     window.NutritionCore = NutritionCore;
   }
 })();
+
+if (typeof module !== "undefined" && require.main === module) {
+  var assert = require("assert");
+  var NutritionCore = module.exports;
+
+  var days = {
+    "2026-08-20": { body: { bodyFat: 10.8, skinfolds: { abdominal: 17 }, circ: { waist: 79.5 } } },
+    "2026-09-01": { body: { bodyFat: 11 } },
+    "2026-10-01": { body: { bodyFat: 12 } }
+  };
+  var health = NutritionCore.latestHealth(days, "2026-09-15");
+  assert.strictEqual(health.body.bodyFat.value, 11);
+  assert.strictEqual(health.body.bodyFat.key, "2026-09-01");
+  assert.strictEqual(health.skinfolds.abdominal.value, 17);
+  assert.strictEqual(health.skinfolds.abdominal.key, "2026-08-20");
+  assert.strictEqual(health.circ.waist.value, 79.5);
+  assert.strictEqual(health.circ.waist.key, "2026-08-20");
+  assert.deepStrictEqual(health.vitals, {});
+  assert.deepStrictEqual(health.labs, {});
+  var groups = ["body", "skinfolds", "circ", "vitals", "labs"];
+  var g;
+  var names;
+  var n;
+  for (g = 0; g < groups.length; g++) {
+    names = Object.keys(health[groups[g]]);
+    for (n = 0; n < names.length; n++) {
+      assert.notStrictEqual(health[groups[g]][names[n]].key, "2026-10-01");
+    }
+  }
+}
