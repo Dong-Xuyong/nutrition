@@ -169,6 +169,43 @@
     return wrap;
   }
 
+  function sleepChart(series, goalH) {
+    var wrap = node("div", "chart");
+    var board = svg("svg");
+    var maxH = 0;
+    var n = series.length;
+    var gap = n > 10 ? 2 : 4;
+    var bw = n ? (300 - gap * (n - 1)) / n : 0;
+    var maxScale;
+    board.setAttribute("viewBox", "0 0 300 120");
+    series.forEach(function (day) {
+      var h = day && typeof day.hours === "number" ? day.hours : 0;
+      if (h > maxH) maxH = h;
+    });
+    maxScale = Math.max(goalH, maxH, 1);
+    series.forEach(function (day, idx) {
+      var hours = day ? day.hours : null;
+      var h;
+      var rect;
+      var title;
+      if (hours === null || typeof hours !== "number") return;
+      h = (hours / maxScale) * 120;
+      rect = svg("rect");
+      title = svg("title");
+      rect.setAttribute("x", String(idx * (bw + gap)));
+      rect.setAttribute("y", String(120 - h));
+      rect.setAttribute("width", String(bw));
+      rect.setAttribute("height", String(h));
+      rect.setAttribute("fill", goalH <= 0 || hours >= goalH ? GREEN : RED);
+      title.textContent = day.key + " " + hours + " h";
+      rect.appendChild(title);
+      board.appendChild(rect);
+    });
+    if (goalH > 0) board.appendChild(guide(120 - (goalH / maxScale) * 120));
+    wrap.appendChild(board);
+    return wrap;
+  }
+
   function weightChart(series, points, goalW) {
     var vals = [];
     var slot = {};
@@ -393,8 +430,7 @@
       vitals: [
         ["restingHr", "Resting HR", "bpm"],
         ["bpSys", "BP systolic", "mmHg"],
-        ["bpDia", "BP diastolic", "mmHg"],
-        ["sleepHours", "Sleep", "h"]
+        ["bpDia", "BP diastolic", "mmHg"]
       ],
       labs: [
         ["glucose", "Glucose", "mmol/L"],
@@ -638,6 +674,47 @@
       caption = kgText(last.weight) + " kg · " + last.key;
       if (goalN > 0) caption += " · goal " + kgText(goalN) + " kg";
       box.appendChild(node("p", "chart-label", caption));
+      els.main.appendChild(box);
+    })();
+
+    (function () {
+      var goalH = goals.sleepHours;
+      var series;
+      var week;
+      var box;
+      var parts;
+      var last;
+      var sum;
+      var count;
+      function hourText(n) {
+        return String(Math.round(n * 10) / 10);
+      }
+      if (!(typeof goalH === "number" && isFinite(goalH) && goalH > 0)) goalH = 0;
+      if (typeof NutritionCore.sleepSeries !== "function") return;
+      series = NutritionCore.sleepSeries(store.days, key, range);
+      if (!Array.isArray(series)) return;
+      series.forEach(function (item) {
+        if (item && typeof item.hours === "number" && isFinite(item.hours)) last = item;
+      });
+      if (!last) return;
+      box = card("Sleep");
+      box.appendChild(sleepChart(series, goalH));
+      parts = ["Last night " + hourText(last.hours) + " h"];
+      week = NutritionCore.sleepSeries(store.days, key, 7);
+      sum = 0;
+      count = 0;
+      if (Array.isArray(week)) {
+        week.forEach(function (item) {
+          if (!(item && typeof item.hours === "number" && isFinite(item.hours))) return;
+          sum += item.hours;
+          count += 1;
+        });
+      }
+      if (count) parts.push("7-day avg " + hourText(sum / count) + " h");
+      if (goalH > 0 && typeof NutritionCore.sleepStreak === "function") {
+        parts.push(NutritionCore.sleepStreak(store.days, goalH, key) + "-night streak (goal " + hourText(goalH) + " h)");
+      }
+      box.appendChild(node("p", "chart-label", parts.join(" \u00b7 ")));
       els.main.appendChild(box);
     })();
 
