@@ -4,7 +4,13 @@
 
   var STORE_KEY = "nutrition-v1";
   var WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  var SCORE = { green: "🟢 On target", yellow: "🟡 Close", red: "🔴 Off target", grey: "⚪ No log" };
+  var SCORE = {
+    green: "🟢 On target",
+    yellow: "🟡 Close",
+    red: "🔴 Off target",
+    grey: "⚪ No log",
+    partial: "⚪ Partial log"
+  };
   var SVGNS = "http://www.w3.org/2000/svg";
   var GREEN = "hsl(152 55% 40%)";
   var RED = "hsl(4 80% 56%)";
@@ -535,7 +541,17 @@
 
     els.main.textContent = "";
     if (band === "grey") {
-      els.main.appendChild(node("section", "card empty", "Nothing logged for this day yet."));
+      var noMeals = Array.isArray(day.exercise) && day.exercise.length;
+      els.main.appendChild(node(
+        "section",
+        "card empty",
+        noMeals ? "No meals logged for this day. It is left out of averages." : "Nothing logged for this day yet."
+      ));
+    }
+    if (band === "partial") {
+      var partial = card("Partial log", "note");
+      partial.appendChild(node("p", "", "This day is left out of averages."));
+      els.main.appendChild(partial);
     }
 
     macros = node("div", "macros");
