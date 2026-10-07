@@ -4,7 +4,13 @@
 
   var STORE_KEY = "nutrition-v1";
   var WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  var SCORE = { green: "🟢 On target", yellow: "🟡 Close", red: "🔴 Off target", grey: "⚪ No log" };
+  var SCORE = {
+    green: "🟢 On target",
+    yellow: "🟡 Close",
+    red: "🔴 Off target",
+    grey: "⚪ No log",
+    partial: "⚪ Partial log"
+  };
   var SVGNS = "http://www.w3.org/2000/svg";
   var GREEN = "hsl(152 55% 40%)";
   var RED = "hsl(4 80% 56%)";
@@ -136,22 +142,36 @@
     return line;
   }
 
-  function calorieChart(series, goalCal) {
+  function calorieChart(series) {
     var wrap = node("div", "chart");
     var board = svg("svg");
     var maxK = 0;
+    var targets = [];
     var n = series.length;
     var gap = n > 10 ? 2 : 4;
     var bw = n ? (300 - gap * (n - 1)) / n : 0;
+    var same;
+    var guideCal;
     var maxScale;
     board.setAttribute("viewBox", "0 0 300 120");
     series.forEach(function (day) {
       var k = day && typeof day.kcal === "number" ? day.kcal : 0;
+      var t = day && typeof day.target === "number" ? day.target : 0;
       if (k > maxK) maxK = k;
+      if (t > 0) targets.push(t);
     });
-    maxScale = Math.max(goalCal > 0 ? goalCal : 0, maxK, 1);
+    same = targets.length > 0;
+    targets.forEach(function (t) {
+      if (t !== targets[0]) same = false;
+    });
+    guideCal = same ? targets[0] : 0;
+    maxScale = Math.max(guideCal, maxK, 1);
+    targets.forEach(function (t) {
+      if (t > maxScale) maxScale = t;
+    });
     series.forEach(function (day, idx) {
       var kcal = day && typeof day.kcal === "number" ? day.kcal : 0;
+      var goal = day && typeof day.target === "number" ? day.target : 0;
       var h = (Math.max(kcal, 0) / maxScale) * 120;
       var rect = svg("rect");
       var title = svg("title");
@@ -159,12 +179,12 @@
       rect.setAttribute("y", String(120 - h));
       rect.setAttribute("width", String(bw));
       rect.setAttribute("height", String(h));
-      rect.setAttribute("fill", goalCal > 0 && kcal > goalCal ? RED : GREEN);
+      rect.setAttribute("fill", goal > 0 && kcal > goal ? RED : GREEN);
       title.textContent = (day && day.key ? day.key + " " : "") + fmt(kcal) + " kcal";
       rect.appendChild(title);
       board.appendChild(rect);
     });
-    if (goalCal > 0) board.appendChild(guide(120 - (goalCal / maxScale) * 120));
+    if (guideCal > 0) board.appendChild(guide(120 - (guideCal / maxScale) * 120));
     wrap.appendChild(board);
     return wrap;
   }
@@ -290,76 +310,66 @@
     return row;
   }
 
-  function finiteNumber(value) {
-    return typeof value === "number" && isFinite(value);
+  function sessionsMap() {
+    return streetlifting && streetlifting.sessions && typeof streetlifting.sessions === "object"
+      ? streetlifting.sessions
+      : {};
   }
 
-  function titleCaseSlug(slug) {
-    return String(slug || "")
-      .split("-")
-      .map(function (word) {
-        if (!word) return "";
-        return word.charAt(0).toUpperCase() + word.slice(1);
-      })
-      .filter(function (word) {
-        return word;
-      })
-      .join(" ");
+  function workoutKcalText(item) {
+    if (!item || !(item.kcal > 0)) return "";
+    if (item.logged) return fmt(item.kcal) + " kcal";
+    return "about " + fmt(item.kcal) + " kcal";
   }
 
-  function activityLabel(activity) {
-    var name = titleCaseSlug(activity && activity.type);
-    if (activity && finiteNumber(activity.km)) {
-      name = (name ? name + " " : "") + String(activity.km) + " km";
+  function workoutCard(key) {
+    var view;
+    var row;
+    var section;
+    var shown = false;
+    if (typeof NutritionCore.workoutView !== "function") return null;
+    view = NutritionCore.workoutView(store, streetlifting, key, 1);
+    row = view && view.rows ? view.rows[view.rows.length - 1] : null;
+    if (!row || row.key !== key) return null;
+    section = card("Workout");
+    if (row.strength && Array.isArray(row.strength.exercises)) {
+      row.strength.exercises.forEach(function (ex) {
+        var line;
+        var burned;
+        if (!ex) return;
+        line = node("div", "ex-row");
+        line.appendChild(node("span", "", ex.name || "Strength"));
+        burned = node(
+          "span",
+          "kcal",
+          row.strength.missingWeight ? "No bodyweight" : NutritionCore.formatKcalRange({
+            mid: ex.mid,
+            low: ex.low,
+            high: ex.high
+          })
+        );
+        burned.style.gridColumn = "3";
+        line.appendChild(burned);
+        section.appendChild(line);
+        shown = true;
+      });
     }
-    return name;
-  }
-
-  function sessionKcal(session) {
-    var rows = [];
-    var found = false;
-    var activities;
-    var i;
-    var activity;
-    if (!session || typeof session !== "object") return null;
-    if (finiteNumber(session.liftKcal)) {
-      found = true;
-      rows.push({ name: "Strength", kcal: session.liftKcal });
-    }
-    activities = Array.isArray(session.activities) ? session.activities : [];
-    for (i = 0; i < activities.length; i++) {
-      activity = activities[i];
-      if (!activity || typeof activity !== "object" || !finiteNumber(activity.kcal)) continue;
-      found = true;
-      rows.push({ name: activityLabel(activity), kcal: activity.kcal });
-    }
-    return found ? rows : null;
-  }
-
-  function daysForRender() {
-    var days = {};
-    var source = store.days && typeof store.days === "object" ? store.days : {};
-    var sessions =
-      streetlifting && streetlifting.sessions && typeof streetlifting.sessions === "object"
-        ? streetlifting.sessions
-        : {};
-    Object.keys(source).forEach(function (key) {
-      days[key] = source[key];
+    (row.manual || []).forEach(function (item) {
+      var line;
+      var burned;
+      var text = workoutKcalText(item);
+      if (!text) return;
+      line = node("div", "ex-row");
+      line.appendChild(node("span", "", item.name || "Exercise"));
+      burned = node("span", "kcal", text);
+      burned.style.gridColumn = "3";
+      line.appendChild(burned);
+      section.appendChild(line);
+      shown = true;
     });
-    Object.keys(sessions).forEach(function (key) {
-      var rows = sessionKcal(sessions[key]);
-      var copy = {};
-      var day = source[key];
-      if (!rows) return;
-      if (day && typeof day === "object") {
-        Object.keys(day).forEach(function (name) {
-          copy[name] = day[name];
-        });
-      }
-      copy.exercise = rows;
-      days[key] = copy;
-    });
-    return days;
+    if (!shown) return null;
+    section.appendChild(node("p", "chart-label", "Shown separately. Not subtracted from eaten."));
+    return section;
   }
 
   function acceptStreetlifting(remote) {
@@ -535,7 +545,11 @@
     var streak;
     var remaining;
     var eaten;
-    var net;
+    var sessions;
+    var balance;
+    var status;
+    var targetCal;
+    var workout;
     var macros;
     var anyMacro;
     var meals;
@@ -544,38 +558,60 @@
     var grid;
     var heat;
     if (!isDayKey(key)) return;
-    days = daysForRender();
+    days = store.days && typeof store.days === "object" ? store.days : {};
+    sessions = sessionsMap();
     goals = store.goals || {};
     day = days[key] || {};
     totals = NutritionCore.totals(days[key]) || {};
-    band = NutritionCore.score(days[key], goals);
-    streak = NutritionCore.streak(days, goals, today);
-    eaten = Number(totals.kcal) || 0;
-    net = typeof totals.net === "number" ? totals.net : eaten;
-    remaining = goals.calories > 0 ? goals.calories - net : null;
+    balance = NutritionCore.dayBalance(days[key], goals, sessions[key]);
+    status = NutritionCore.logStatus(days[key]);
+    targetCal = balance.targets.calories;
+    band = NutritionCore.score(days[key], goals, sessions[key]);
+    streak = NutritionCore.streak(days, goals, today, sessions);
+    eaten = balance.eaten;
+    remaining = balance.remaining;
 
     els.period.textContent = NutritionCore.label(key) || "";
     els.today.hidden = key === today;
     els.ring.style.setProperty(
       "--p",
-      String(goals.calories > 0 ? Math.min(100, Math.round((eaten / goals.calories) * 100)) : 0)
+      String(targetCal > 0 ? Math.min(100, Math.round((eaten / targetCal) * 100)) : 0)
     );
-    els.ring.classList.toggle("over", goals.calories > 0 && net > goals.calories);
-    if (remaining == null) els.remain.textContent = fmt(eaten) + " eaten";
-    else els.remain.textContent = fmt(Math.abs(remaining)) + (remaining < 0 ? " over" : " left");
-    els.score.textContent = (SCORE[band] || "⚪ No log") + " · " + streak + " day streak";
+    els.ring.classList.toggle("over", targetCal > 0 && eaten > targetCal);
+    if (!(targetCal > 0)) els.remain.textContent = fmt(eaten) + " eaten";
+    else if (status === "complete") {
+      els.remain.textContent =
+        fmt(eaten) + " eaten vs " + fmt(targetCal) + " · " +
+        fmt(Math.abs(remaining)) + (remaining < 0 ? " over" : " left");
+    } else {
+      els.remain.textContent = fmt(eaten) + " eaten vs " + fmt(targetCal);
+    }
+    els.score.textContent =
+      (SCORE[band] || "⚪ No log") + " · " +
+      (balance.type === "training" ? "Training" : "Rest") + " · " +
+      streak + " day streak";
 
     els.main.textContent = "";
     if (band === "grey") {
-      els.main.appendChild(node("section", "card empty", "Nothing logged for this day yet."));
+      var noMeals = Array.isArray(day.exercise) && day.exercise.length;
+      els.main.appendChild(node(
+        "section",
+        "card empty",
+        noMeals ? "No meals logged for this day. It is left out of averages." : "Nothing logged for this day yet."
+      ));
+    }
+    if (band === "partial") {
+      var partial = card("Partial log", "note");
+      partial.appendChild(node("p", "", "This day is left out of averages."));
+      els.main.appendChild(partial);
     }
 
     macros = node("div", "macros");
     anyMacro = false;
     [
-      ["Protein", totals.protein, goals.protein],
-      ["Carbs", totals.carbs, goals.carbs],
-      ["Fat", totals.fat, goals.fat]
+      ["Protein", totals.protein, balance.targets.protein],
+      ["Carbs", totals.carbs, balance.targets.carbs],
+      ["Fat", totals.fat, balance.targets.fat]
     ].forEach(function (spec) {
       var total = typeof spec[1] === "number" ? spec[1] : 0;
       var goal = typeof spec[2] === "number" ? spec[2] : 0;
@@ -622,23 +658,10 @@
       els.main.appendChild(section);
     });
 
-    if (Array.isArray(day.exercise) && day.exercise.length) {
-      var exercise = card("Exercise");
-      day.exercise.forEach(function (entry) {
-        var row;
-        var burned;
-        if (!entry || typeof entry !== "object") return;
-        row = node("div", "ex-row");
-        burned = node("span", "kcal", fmt(entry.kcal) + " kcal");
-        burned.style.gridColumn = "3";
-        row.appendChild(node("span", "", entry.name || ""));
-        row.appendChild(burned);
-        exercise.appendChild(row);
-      });
-      els.main.appendChild(exercise);
-    }
+    workout = workoutCard(key);
+    if (workout) els.main.appendChild(workout);
 
-    series = NutritionCore.series(days, goals, key, range);
+    series = NutritionCore.series(days, goals, key, range, sessions);
     if (!Array.isArray(series)) series = [];
     (function () {
       var trends = card("Trends");
@@ -654,7 +677,7 @@
       });
       trends.appendChild(toggle);
       trends.appendChild(node("p", "chart-label", "Calories"));
-      trends.appendChild(calorieChart(series, goals.calories > 0 ? goals.calories : 0));
+      trends.appendChild(calorieChart(series));
       els.main.appendChild(trends);
     })();
 
@@ -721,7 +744,7 @@
     var healthCard = bodyHealthCard(key);
     if (healthCard) els.main.appendChild(healthCard);
 
-    lines = NutritionCore.insights(days, goals, key) || [];
+    lines = NutritionCore.insights(days, goals, key, sessions) || [];
     if (lines.length) {
       var insightCard = card("Insights");
       var list = node("ul", "insights");
@@ -742,7 +765,7 @@
       });
       month.appendChild(head);
       (grid.cells || []).forEach(function (cell) {
-        var mark = NutritionCore.score(days[cell.key], goals);
+        var mark = NutritionCore.score(days[cell.key], goals, sessions[cell.key]);
         var link = document.createElement("a");
         link.href = "#" + cell.key;
         link.textContent = String(parseInt(cell.key.slice(8), 10));
