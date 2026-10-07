@@ -219,45 +219,48 @@
     };
   }
 
-  function score(day, goals) {
+  function score(day, goals, session) {
     var status = logStatus(day);
     if (status === "partial") return "partial";
     if (status !== "complete") return "grey";
-    var g = goals || {};
+    var bal = dayBalance(day, goals, session);
     var t = totals(day);
-    var calOn = g.calories > 0;
-    var proOn = g.protein > 0;
-    var ratio = calOn ? t.net / g.calories : 1;
+    var cal = bal.targets.calories;
+    var pro = bal.targets.protein;
+    var ratio = cal > 0 ? bal.eaten / cal : 1;
     var band10 = ratio >= 0.9 && ratio <= 1.1;
     var band20 = ratio >= 0.8 && ratio <= 1.2;
-    var pOk = !proOn || t.protein >= g.protein * 0.9;
+    var pOk = !(pro > 0) || t.protein >= pro * 0.9;
     if (band10 && pOk) return "green";
     if (band20) return "yellow";
     return "red";
   }
 
-  function streak(days, goals, todayKey) {
+  function streak(days, goals, todayKey, sessions) {
     var map = days || {};
+    var sess = sessions || {};
     var key = todayKey;
-    var todayBand = score(map[key], goals);
+    var todayBand = score(map[key], goals, sess[key]);
     if (todayBand === "grey" || todayBand === "partial") key = shift(key, -1);
     var count = 0;
     for (var i = 0; i < 400; i++) {
-      if (score(map[key], goals) !== "green") break;
+      if (score(map[key], goals, sess[key]) !== "green") break;
       count += 1;
       key = shift(key, -1);
     }
     return count;
   }
 
-  function series(days, goals, endKey, n) {
+  function series(days, goals, endKey, n, sessions) {
     var map = days || {};
+    var sess = sessions || {};
     var keys = keysEnding(endKey, n);
     var out = [];
     for (var i = 0; i < keys.length; i++) {
       var key = keys[i];
       var day = map[key];
       var t = totals(day);
+      var bal = dayBalance(day, goals, sess[key]);
       out.push({
         key: key,
         weekday: weekday(key),
@@ -266,17 +269,19 @@
         carbs: t.carbs,
         fat: t.fat,
         exercise: t.exercise,
-        net: t.net,
-        score: score(day, goals),
+        net: t.kcal,
+        target: bal.targets.calories,
+        type: bal.type,
+        score: score(day, goals, sess[key]),
         weight: positiveWeight(day)
       });
     }
     return out;
   }
 
-  function insights(days, goals, endKey) {
+  function insights(days, goals, endKey, sessions) {
     var map = days || {};
-    var g = goals || {};
+    var sess = sessions || {};
     var keys = keysEnding(endKey, 7);
     var logged = [];
     for (var i = 0; i < keys.length; i++) {
@@ -286,22 +291,25 @@
 
     var lines = [];
     var kcalSum = 0;
+    var over = 0;
+    var under = 0;
+    var proDays = 0;
     for (var a = 0; a < logged.length; a++) {
-      kcalSum += totals(map[logged[a]]).kcal;
+      var loggedDay = map[logged[a]];
+      var bal = dayBalance(loggedDay, goals, sess[logged[a]]);
+      var eatenKcal = totals(loggedDay).kcal;
+      kcalSum += eatenKcal;
+      if (bal.targets.calories > 0 && eatenKcal > bal.targets.calories) over += 1;
+      if (bal.targets.protein > 0) {
+        proDays += 1;
+        if (totals(loggedDay).protein < bal.targets.protein) under += 1;
+      }
     }
     var avg = Math.round(kcalSum / logged.length);
-    if (g.calories > 0) {
-      lines.push("Averaging " + formatInt(avg) + " kcal vs " + formatInt(g.calories) + " goal");
-    } else {
-      lines.push("Averaging " + formatInt(avg) + " kcal");
-    }
-
-    if (g.protein > 0) {
-      var under = 0;
-      for (var p = 0; p < logged.length; p++) {
-        if (totals(map[logged[p]]).protein < g.protein) under += 1;
-      }
-      lines.push("Protein under goal on " + under + " of " + logged.length + " logged days");
+    lines.push("Averaging " + formatInt(avg) + " kcal eaten");
+    lines.push("Over that day's target on " + over + " of " + logged.length + " logged days");
+    if (proDays > 0) {
+      lines.push("Protein under that day's target on " + under + " of " + proDays + " logged days");
     }
 
     var foods = new Map();
@@ -437,15 +445,19 @@
   }
 
   var STRENGTH_MET = 5.5;
-  var RESTING_MET = 1;
   var MIN_PER_SET = 2.5;
-  var ESTIMATE_BAND = 0.3;
+  var LIFT_BAND = 0.25;
   var DEFAULT_BMR = 1610;
   var DEFAULT_NEAT = 1.3;
+  var DEFAULT_BW = 67.6;
   var DEFAULT_TRAIN_KCAL = 2050;
+  var DEFAULT_TRAIN_PROTEIN = 150;
   var DEFAULT_TRAIN_CARBS = 225;
+  var DEFAULT_TRAIN_FAT = 60;
   var DEFAULT_REST_KCAL = 1650;
+  var DEFAULT_REST_PROTEIN = 150;
   var DEFAULT_REST_CARBS = 130;
+  var DEFAULT_REST_FAT = 60;
 
   function positiveNum(value) {
     return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
@@ -459,8 +471,8 @@
     var value = mid > 0 ? mid : 0;
     return {
       mid: value,
-      low: value * (1 - ESTIMATE_BAND),
-      high: value * (1 + ESTIMATE_BAND)
+      low: value * (1 - LIFT_BAND),
+      high: value * (1 + LIFT_BAND)
     };
   }
 
@@ -528,16 +540,29 @@
     if (type === "rest") {
       return {
         calories: positiveNum(rest.calories) || DEFAULT_REST_KCAL,
+        protein: positiveNum(rest.protein) || DEFAULT_REST_PROTEIN,
         carbs: positiveNum(rest.carbs) || DEFAULT_REST_CARBS,
-        protein: positiveNum(rest.protein) || positiveNum(g.protein),
-        fat: positiveNum(rest.fat) || positiveNum(g.fat)
+        fat: positiveNum(rest.fat) || DEFAULT_REST_FAT
       };
     }
     return {
       calories: positiveNum(g.calories) || DEFAULT_TRAIN_KCAL,
+      protein: positiveNum(g.protein) || DEFAULT_TRAIN_PROTEIN,
       carbs: positiveNum(g.carbs) || DEFAULT_TRAIN_CARBS,
-      protein: positiveNum(g.protein),
-      fat: positiveNum(g.fat)
+      fat: positiveNum(g.fat) || DEFAULT_TRAIN_FAT
+    };
+  }
+
+  function dayBalance(day, goals, session) {
+    var kind = resolveDayType(day, session);
+    var targets = dayTargets(goals, kind.type);
+    var eaten = totals(day).kcal;
+    return {
+      type: kind.type,
+      typeSource: kind.source,
+      targets: targets,
+      eaten: eaten,
+      remaining: targets.calories > 0 ? targets.calories - eaten : null
     };
   }
 
@@ -550,18 +575,23 @@
     return "other";
   }
 
+  function durationMinutes(entry) {
+    if (!entry || typeof entry !== "object") return null;
+    if (typeof entry.durationMin === "number" && Number.isFinite(entry.durationMin) && entry.durationMin > 0) {
+      return entry.durationMin;
+    }
+    if (typeof entry.minutes === "number" && Number.isFinite(entry.minutes) && entry.minutes > 0) {
+      return entry.minutes;
+    }
+    return null;
+  }
+
   function entryTrains(entry) {
     if (!entry || typeof entry !== "object") return false;
-    var role = exerciseRole(entry.name);
-    if (role === "walk" || role === "mobility" || role === "work") return false;
-    var hasDur = typeof entry.durationMin === "number" && Number.isFinite(entry.durationMin);
-    var kcal = positiveNum(entry.kcal);
-    if (role === "run") {
-      if (hasDur) return entry.durationMin >= 30;
-      return kcal > 0;
-    }
-    if (hasDur) return entry.durationMin >= 30;
-    return kcal > 0;
+    var name = entry.name || entry.type || "";
+    if (exerciseRole(name) !== "run") return false;
+    var minutes = durationMinutes(entry);
+    return minutes != null && minutes >= 30;
   }
 
   function normalizeDayType(value) {
@@ -651,8 +681,7 @@
       best = weight;
     }
     if (best != null) return best;
-    var start = goals && positiveNum(goals.startWeight);
-    return start || null;
+    return DEFAULT_BW;
   }
 
   function strengthEstimate(session, bwKg) {
@@ -688,10 +717,10 @@
         exercises: exercises
       };
     }
-    var net = (STRENGTH_MET - RESTING_MET) * bwKg * (minutes / 60);
-    var total = bandFromMid(net);
+    var gross = STRENGTH_MET * bwKg * (minutes / 60);
+    var total = bandFromMid(gross);
     for (var i = 0; i < exercises.length; i++) {
-      var share = net * (exercises[i].sets / sets);
+      var share = gross * (exercises[i].sets / sets);
       var band = bandFromMid(share);
       exercises[i].mid = band.mid;
       exercises[i].low = band.low;
@@ -708,7 +737,7 @@
   }
 
   function loggedStrength(kcal) {
-    var band = pointBand(kcal);
+    var band = bandFromMid(kcal);
     return {
       minutes: null,
       assumed: false,
@@ -730,50 +759,98 @@
     };
   }
 
-  function manualExercises(day, session) {
-    var list = day && Array.isArray(day.exercise) ? day.exercise : [];
+  function runMet(km, minutes) {
+    if (!(km > 0) || !(minutes > 0)) return 9.8;
+    var mph = (km / 1.60934) / (minutes / 60);
+    var met = mph * (9.8 / 6);
+    if (met < 6) return 6;
+    return Math.round(met * 10) / 10;
+  }
+
+  function metForName(name, km, minutes) {
+    var n = String(name || "").toLowerCase();
+    if (/jump\s*-?\s*rope|\bskipping\b/.test(n)) return 11;
+    if (exerciseRole(name) === "run" || /\bjog/.test(n)) return runMet(km, minutes);
+    if (exerciseRole(name) === "walk") return 3.5;
+    if (exerciseRole(name) === "mobility") return 2.5;
+    return STRENGTH_MET;
+  }
+
+  function workName(raw, km) {
+    var label = String(raw || "").trim() || "Exercise";
+    if (typeof km === "number" && Number.isFinite(km) && km > 0 && label.indexOf(String(km)) === -1) {
+      label = label + " " + km + " km";
+    }
+    return label;
+  }
+
+  function workKey(name) {
+    return String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+
+  function estimateWork(name, givenKcal, minutes, km, bwKg) {
+    if (givenKcal > 0) return { kcal: givenKcal, logged: true, met: null };
+    if (!(minutes > 0) || !(bwKg > 0)) return null;
+    var met = metForName(name, km, minutes);
+    return { kcal: met * bwKg * (minutes / 60), logged: false, met: met };
+  }
+
+  function manualExercises(day, session, bwKg) {
     var covered = countSets(session) > 0 || (session && positiveNum(session.liftKcal) > 0);
-    var out = [];
+    var map = {};
+    var order = [];
+    function add(item) {
+      if (!item || !(item.kcal > 0)) return;
+      var id = workKey(item.name);
+      if (!id) return;
+      var prev = map[id];
+      if (!prev) {
+        map[id] = item;
+        order.push(id);
+        return;
+      }
+      if (item.logged && !prev.logged) map[id] = item;
+      else if (item.logged === prev.logged && item.kcal > prev.kcal) map[id] = item;
+    }
+    var list = day && Array.isArray(day.exercise) ? day.exercise : [];
     for (var i = 0; i < list.length; i++) {
       var entry = list[i];
       if (!entry || typeof entry !== "object") continue;
       if (covered && isLiftNamed(entry.name)) continue;
-      var kcal = num(entry.kcal);
-      if (!(kcal > 0) && !(typeof entry.name === "string" && entry.name.trim())) continue;
-      out.push({
-        name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : "Exercise",
-        kcal: kcal > 0 ? kcal : 0,
-        durationMin:
-          typeof entry.durationMin === "number" && Number.isFinite(entry.durationMin)
-            ? entry.durationMin
-            : null,
-        source: typeof entry.source === "string" && entry.source.trim() ? entry.source.trim() : "",
+      var minutes = durationMinutes(entry);
+      var est = estimateWork(entry.name, positiveNum(entry.kcal), minutes, entry.km, bwKg);
+      if (!est) continue;
+      add({
+        name: workName(entry.name, entry.km),
+        kcal: est.kcal,
+        logged: est.logged,
+        met: est.met,
+        durationMin: minutes,
+        source: typeof entry.source === "string" ? entry.source.trim() : "",
         role: exerciseRole(entry.name)
       });
     }
-    if (out.length === 0 && session && Array.isArray(session.activities)) {
-      for (var a = 0; a < session.activities.length; a++) {
-        var activity = session.activities[a];
-        if (!activity || typeof activity !== "object" || !(positiveNum(activity.kcal) > 0)) continue;
-        var label =
-          typeof activity.type === "string" && activity.type.trim()
-            ? activity.type.trim()
-            : "Activity";
-        if (typeof activity.km === "number" && Number.isFinite(activity.km)) {
-          label = label + " " + activity.km + " km";
-        }
-        out.push({
-          name: label,
-          kcal: activity.kcal,
-          durationMin:
-            typeof activity.durationMin === "number" && Number.isFinite(activity.durationMin)
-              ? activity.durationMin
-              : null,
-          source: "streetlifting",
-          role: exerciseRole(label)
-        });
-      }
+    var activities = session && Array.isArray(session.activities) ? session.activities : [];
+    for (var a = 0; a < activities.length; a++) {
+      var activity = activities[a];
+      if (!activity || typeof activity !== "object") continue;
+      var label = activity.type || activity.name;
+      if (covered && isLiftNamed(label)) continue;
+      var actMinutes = durationMinutes(activity);
+      var actEst = estimateWork(label, positiveNum(activity.kcal), actMinutes, activity.km, bwKg);
+      if (!actEst) continue;
+      add({
+        name: workName(label, activity.km),
+        kcal: actEst.kcal,
+        logged: actEst.logged,
+        met: actEst.met,
+        durationMin: actMinutes,
+        source: "streetlifting",
+        role: exerciseRole(label)
+      });
     }
+    var out = [];
+    for (var n = 0; n < order.length; n++) out.push(map[order[n]]);
     return out;
   }
 
@@ -879,7 +956,7 @@
     var strength = null;
     if (countSets(session) > 0) strength = strengthEstimate(session, bw);
     else if (session && positiveNum(session.liftKcal) > 0) strength = loggedStrength(session.liftKcal);
-    var manual = manualExercises(day, session);
+    var manual = manualExercises(day, session, bw);
     var manualMid = 0;
     for (var i = 0; i < manual.length; i++) manualMid += manual[i].kcal;
     var manualBand = pointBand(manualMid);
@@ -965,7 +1042,7 @@
     }
     var lifts = Object.keys(liftMap).map(function (name) {
       var item = liftMap[name];
-      item.band = item.logged ? pointBand(item.mid) : bandFromMid(item.mid);
+      item.band = bandFromMid(item.mid);
       return item;
     });
     lifts.sort(byMid);
@@ -1137,6 +1214,40 @@
     };
   }
 
+  function sleepHours(day) {
+    var value = day && day.vitals ? day.vitals.sleepHours : undefined;
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+    return null;
+  }
+
+  function sleepSeries(days, endKey, n) {
+    var map = days || {};
+    var keys = keysEnding(endKey, n);
+    var out = [];
+    for (var i = 0; i < keys.length; i++) {
+      out.push({
+        key: keys[i],
+        hours: sleepHours(map[keys[i]])
+      });
+    }
+    return out;
+  }
+
+  function sleepStreak(days, goal, endKey) {
+    if (typeof goal !== "number" || !Number.isFinite(goal) || goal <= 0) return 0;
+    var map = days || {};
+    var key = endKey;
+    if (sleepHours(map[key]) === null) key = shift(key, -1);
+    var count = 0;
+    for (var i = 0; i < 3660; i++) {
+      var hours = sleepHours(map[key]);
+      if (hours === null || hours < goal) break;
+      count += 1;
+      key = shift(key, -1);
+    }
+    return count;
+  }
+
   var NutritionCore = {
     MEALS: MEALS,
     blankStore: blankStore,
@@ -1152,7 +1263,10 @@
     insights: insights,
     weightTrend: weightTrend,
     latestHealth: latestHealth,
+    sleepSeries: sleepSeries,
+    sleepStreak: sleepStreak,
     logStatus: logStatus,
+    dayBalance: dayBalance,
     expenditureBase: expenditureBase,
     dayTargets: dayTargets,
     exerciseRole: exerciseRole,
@@ -1259,15 +1373,17 @@ if (typeof module !== "undefined" && require.main === module) {
     },
     80
   );
-  var expectNet = (5.5 - 1) * 80 * ((8 * 2.5) / 60);
+  var expectGross = 5.5 * 80 * ((8 * 2.5) / 60);
   assert.strictEqual(est.assumed, true);
   assert.strictEqual(est.minutes, 20);
-  assert.ok(Math.abs(est.total.mid - expectNet) < 1e-9);
-  assert.strictEqual(expectNet, 120);
+  assert.ok(Math.abs(est.total.mid - expectGross) < 1e-9);
+  assert.ok(Math.abs(expectGross - (440 / 3)) < 1e-9);
   assert.strictEqual(est.exercises[0].name, "Squat");
-  assert.ok(Math.abs(est.exercises[0].mid - 75) < 1e-9);
-  assert.ok(Math.abs(est.exercises[1].mid - 45) < 1e-9);
-  assert.strictEqual(NutritionCore.formatKcalRange(est.total), "about 80–160 kcal");
+  assert.ok(Math.abs(est.exercises[0].mid - expectGross * (5 / 8)) < 1e-9);
+  assert.ok(Math.abs(est.exercises[1].mid - expectGross * (3 / 8)) < 1e-9);
+  assert.strictEqual(NutritionCore.formatKcalRange(est.total), "about 110–180 kcal");
+  assert.ok(Math.abs(est.total.low - expectGross * 0.75) < 1e-9);
+  assert.ok(Math.abs(est.total.high - expectGross * 1.25) < 1e-9);
 
   var timed = NutritionCore.strengthEstimate(
     { durationMin: 60, lifts: { dip: [{ kg: 40, reps: 5 }] } },
@@ -1275,7 +1391,7 @@ if (typeof module !== "undefined" && require.main === module) {
   );
   assert.strictEqual(timed.assumed, false);
   assert.strictEqual(timed.minutes, 60);
-  assert.ok(Math.abs(timed.total.mid - 4.5 * 80) < 1e-9);
+  assert.ok(Math.abs(timed.total.mid - 5.5 * 80) < 1e-9);
 
   assert.strictEqual(NutritionCore.exerciseRole("Lunch walk"), "walk");
   assert.strictEqual(NutritionCore.exerciseRole("Workout"), "other");
@@ -1284,9 +1400,10 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.strictEqual(NutritionCore.entryTrains({ name: "Work shift", durationMin: 480, kcal: 220 }), false);
   assert.strictEqual(NutritionCore.entryTrains({ name: "Easy run", durationMin: 42, kcal: 480 }), true);
   assert.strictEqual(NutritionCore.entryTrains({ name: "Run", durationMin: 20, kcal: 200 }), false);
-  assert.strictEqual(NutritionCore.entryTrains({ name: "Run", kcal: 360 }), true);
-  assert.strictEqual(NutritionCore.entryTrains({ name: "Bike", kcal: 250 }), true);
+  assert.strictEqual(NutritionCore.entryTrains({ name: "Run", kcal: 360 }), false);
+  assert.strictEqual(NutritionCore.entryTrains({ name: "Bike", kcal: 250 }), false);
   assert.strictEqual(NutritionCore.entryTrains({ name: "Bike", durationMin: 20, kcal: 150 }), false);
+  assert.strictEqual(NutritionCore.entryTrains({ name: "Jump rope", kcal: 125 }), false);
 
   var customBase = NutritionCore.expenditureBase({ bmr: 1700, neatFactor: 1.2 });
   assert.strictEqual(customBase.kcal, 2040);
@@ -1294,16 +1411,25 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.ok(Math.abs(defaultBase.kcal - 1610 * 1.3) < 1e-9);
   var restTargets = NutritionCore.dayTargets({}, "rest");
   assert.strictEqual(restTargets.calories, 1650);
+  assert.strictEqual(restTargets.protein, 150);
   assert.strictEqual(restTargets.carbs, 130);
-  var restOverride = NutritionCore.dayTargets({ restDay: { calories: 1700, carbs: 140 }, calories: 2050, carbs: 225 }, "rest");
+  assert.strictEqual(restTargets.fat, 60);
+  var restOverride = NutritionCore.dayTargets(
+    { restDay: { calories: 1700, carbs: 140 }, calories: 2050, protein: 160, carbs: 225, fat: 70 },
+    "rest"
+  );
   assert.strictEqual(restOverride.calories, 1700);
+  assert.strictEqual(restOverride.protein, 150);
   assert.strictEqual(restOverride.carbs, 140);
+  assert.strictEqual(restOverride.fat, 60);
   var trainTargets = NutritionCore.dayTargets({ calories: 2050, carbs: 225 }, "training");
   assert.strictEqual(trainTargets.calories, 2050);
   assert.strictEqual(trainTargets.carbs, 225);
   var trainFallback = NutritionCore.dayTargets({}, "training");
   assert.strictEqual(trainFallback.calories, 2050);
+  assert.strictEqual(trainFallback.protein, 150);
   assert.strictEqual(trainFallback.carbs, 225);
+  assert.strictEqual(trainFallback.fat, 60);
 
   var sample = NutritionCore.sampleWorkout("2026-10-06");
   var view = NutritionCore.workoutView(sample.nutrition, sample.streetlifting, "2026-10-06", 14);
@@ -1315,7 +1441,7 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.strictEqual(view.rows[10].status, "partial");
   assert.strictEqual(view.rows[10].flag.indexOf("Partial") === 0, true);
   assert.strictEqual(view.rows[9].status, "empty");
-  assert.strictEqual(view.rows[9].type, "training");
+  assert.strictEqual(view.rows[9].type, "rest");
   assert.strictEqual(view.rows[9].countsInAverage, false);
   assert.strictEqual(view.rows[5].type, "rest");
   assert.strictEqual(view.rows[5].typeSource, "override");
@@ -1337,9 +1463,9 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.ok(squat && squat.sets >= 4);
   assert.ok(view.avgDeficit != null);
   var todayRow = view.rows[13];
-  var todayNet = (5.5 - 1) * 78.6 * ((11 * 2.5) / 60);
-  assert.ok(Math.abs(todayRow.exercise.mid - todayNet) < 1e-6);
-  assert.ok(Math.abs(todayRow.deficit.mid - (1610 * 1.3 + todayNet - 1970)) < 1e-6);
+  var todayGross = 5.5 * 78.6 * ((11 * 2.5) / 60);
+  assert.ok(Math.abs(todayRow.exercise.mid - todayGross) < 1e-6);
+  assert.ok(Math.abs(todayRow.deficit.mid - (1610 * 1.3 + todayGross - 1970)) < 1e-6);
   assert.ok(todayRow.deficit.high > todayRow.deficit.low);
 
   var wider = NutritionCore.workoutView(sample.nutrition, sample.streetlifting, "2026-10-06", 16);
@@ -1347,4 +1473,156 @@ if (typeof module !== "undefined" && require.main === module) {
   assert.strictEqual(wider.rows[0].countsInAverage, false);
   assert.strictEqual(wider.flagged.indexOf(wider.rows[0]), -1);
   assert.ok(wider.flagged.length === view.flagged.length);
+
+  var acceptGoals = {
+    calories: 2050,
+    protein: 150,
+    carbs: 225,
+    fat: 60,
+    restDay: { calories: 1650, protein: 150, carbs: 130, fat: 60 }
+  };
+  var acceptDay = {
+    meals: {
+      breakfast: [{ name: "Breakfast", kcal: 500, protein: 40 }],
+      lunch: [{ name: "Lunch", kcal: 800, protein: 50 }],
+      dinner: [{ name: "Dinner", kcal: 600, protein: 45 }],
+      snacks: [{ name: "Snack", kcal: 187, protein: 20 }]
+    }
+  };
+  var acceptSession = {
+    bw: 70,
+    lifts: {
+      pullup: [
+        { kg: 20, reps: 5 },
+        { kg: 20, reps: 5 },
+        { kg: 20, reps: 5 },
+        { kg: 20, reps: 5 }
+      ]
+    },
+    activities: [{ type: "Jump rope", kcal: 125 }]
+  };
+  var acceptBal = NutritionCore.dayBalance(acceptDay, acceptGoals, acceptSession);
+  assert.strictEqual(acceptBal.eaten, 2087);
+  assert.strictEqual(acceptBal.type, "training");
+  assert.strictEqual(acceptBal.typeSource, "session");
+  assert.strictEqual(acceptBal.targets.calories, 2050);
+  assert.strictEqual(acceptBal.remaining, -37);
+  var acceptView = NutritionCore.workoutView(
+    { version: 1, goals: acceptGoals, days: { "2026-10-06": acceptDay } },
+    { sessions: { "2026-10-06": acceptSession } },
+    "2026-10-06",
+    1
+  );
+  var acceptRow = acceptView.rows[0];
+  assert.strictEqual(acceptRow.key, "2026-10-06");
+  assert.strictEqual(acceptRow.intake, 2087);
+  assert.strictEqual(acceptRow.targets.calories, 2050);
+  var rope = null;
+  var ropeI;
+  for (ropeI = 0; ropeI < acceptRow.manual.length; ropeI++) {
+    if (acceptRow.manual[ropeI].name === "Jump rope") rope = acceptRow.manual[ropeI];
+  }
+  assert.ok(rope);
+  assert.strictEqual(rope.kcal, 125);
+  assert.strictEqual(rope.logged, true);
+  var liftMid = 5.5 * 70 * ((4 * 2.5) / 60);
+  assert.ok(Math.abs(acceptRow.strength.total.mid - liftMid) < 1e-6);
+  assert.ok(Math.abs(acceptRow.exercise.mid - (liftMid + 125)) < 1e-6);
+  assert.ok(Math.abs(acceptRow.deficit.mid - (1610 * 1.3 + liftMid + 125 - 2087)) < 1e-6);
+  assert.ok(Math.abs(acceptRow.deficit.mid - (2400 + liftMid + 125 - 2087)) > 1);
+
+  var shortRun = NutritionCore.dayBalance(
+    { exercise: [{ name: "Run", durationMin: 25, kcal: 200 }] },
+    acceptGoals,
+    null
+  );
+  assert.strictEqual(shortRun.type, "rest");
+  assert.strictEqual(shortRun.targets.calories, 1650);
+  var longRun = NutritionCore.dayBalance(
+    { exercise: [{ name: "Easy run", durationMin: 40, kcal: 400 }] },
+    acceptGoals,
+    null
+  );
+  assert.strictEqual(longRun.type, "training");
+  assert.strictEqual(longRun.targets.calories, 2050);
+  var forcedRest = NutritionCore.dayBalance(
+    { dayType: "rest" },
+    acceptGoals,
+    acceptSession
+  );
+  assert.strictEqual(forcedRest.type, "rest");
+  assert.strictEqual(forcedRest.targets.calories, 1650);
+
+  var eatBackDay = {
+    meals: {
+      breakfast: [{ name: "Big", kcal: 2500, protein: 200 }],
+      lunch: [],
+      dinner: [],
+      snacks: []
+    },
+    exercise: [{ name: "Jump rope", kcal: 800 }]
+  };
+  assert.strictEqual(NutritionCore.logStatus(eatBackDay), "complete");
+  assert.strictEqual(NutritionCore.totals(eatBackDay).kcal, 2500);
+  assert.strictEqual(NutritionCore.dayBalance(eatBackDay, acceptGoals, null).type, "rest");
+  assert.strictEqual(NutritionCore.dayBalance(eatBackDay, acceptGoals, null).remaining, 1650 - 2500);
+  assert.strictEqual(NutritionCore.score(eatBackDay, acceptGoals, null), "red");
+  var eatBackTrain = NutritionCore.dayBalance(eatBackDay, acceptGoals, acceptSession);
+  assert.strictEqual(eatBackTrain.type, "training");
+  assert.strictEqual(eatBackTrain.eaten, 2500);
+  assert.strictEqual(eatBackTrain.remaining, 2050 - 2500);
+  assert.strictEqual(NutritionCore.score(eatBackDay, acceptGoals, acceptSession), "red");
+
+  var fallbackBw = NutritionCore.workoutView(
+    {
+      goals: {},
+      days: {
+        "2026-10-06": {
+          meals: {
+            breakfast: [{ name: "A", kcal: 600 }],
+            lunch: [{ name: "B", kcal: 600 }],
+            dinner: [],
+            snacks: []
+          }
+        }
+      }
+    },
+    { sessions: { "2026-10-06": { lifts: { pullup: [{ kg: 10, reps: 5 }] } } } },
+    "2026-10-06",
+    1
+  );
+  assert.ok(Math.abs(fallbackBw.rows[0].strength.total.mid - 5.5 * 67.6 * (2.5 / 60)) < 1e-6);
+  assert.ok(Math.abs(fallbackBw.rows[0].deficit.mid - (1610 * 1.3 + 5.5 * 67.6 * (2.5 / 60) - 1200)) < 1e-6);
+
+  var sleepDays = {
+    "2026-10-01": { vitals: { sleepHours: 8 } },
+    "2026-10-02": { vitals: { sleepHours: 8.5 } },
+    "2026-10-03": { vitals: { sleepHours: 9 } },
+    "2026-10-04": { vitals: { sleepHours: 6 } },
+    "2026-10-05": { vitals: { sleepHours: 8 } },
+    "2026-10-06": { vitals: { sleepHours: 8 } }
+  };
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-03"), 3);
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-04"), 0);
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-06"), 2);
+  assert.strictEqual(NutritionCore.sleepStreak(sleepDays, 8, "2026-10-07"), 2);
+
+  var gappedSleep = {};
+  var sleepKeyList = Object.keys(sleepDays);
+  var si;
+  for (si = 0; si < sleepKeyList.length; si++) {
+    gappedSleep[sleepKeyList[si]] = sleepDays[sleepKeyList[si]];
+  }
+  delete gappedSleep["2026-10-02"];
+  assert.strictEqual(NutritionCore.sleepStreak(gappedSleep, 8, "2026-10-03"), 1);
+
+  var sleepWindow = NutritionCore.sleepSeries(sleepDays, "2026-10-03", 3);
+  assert.strictEqual(sleepWindow.length, 3);
+  assert.strictEqual(sleepWindow[0].hours, 8);
+  assert.strictEqual(sleepWindow[1].hours, 8.5);
+  assert.strictEqual(sleepWindow[2].hours, 9);
+
+  var emptySleep = NutritionCore.sleepSeries({}, "2026-10-03", 2);
+  assert.strictEqual(emptySleep[0].hours, null);
+  assert.strictEqual(emptySleep[1].hours, null);
 }

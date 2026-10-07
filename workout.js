@@ -433,10 +433,13 @@
     return node(
       "p",
       "method",
-      "Strength burn is an estimate: 5.5 METs × body weight × hours, minus the resting 1 MET already included in the " +
+      "Lifting kcal is an estimate: 5.5 METs × body weight × hours. With no session duration, each set counts as 2.5 minutes, and that total is split across lifts by set count. " +
+        "Lifting figures are a range of about ±25%. Body weight is the session weight, otherwise the latest weigh-in, otherwise 67.6 kg. " +
+        "Other work uses a logged kcal when one is written, otherwise MET × body weight × hours (jump rope about 11, running by pace or about 9.8). " +
+        "Workout kcal is shown separately and is not subtracted from what you ate. " +
+        "An estimated deficit is the rest-day base (" +
         fmt(view.base.kcal) +
-        " kcal base. With no session duration, each set counts as 2.5 minutes, and that total is split across lifts by set count. " +
-        "Figures are a range of about ±30%. Runs and other work use the kcal written on the day."
+        " kcal) plus that day's workout kcal, minus calories eaten."
     );
   }
 
@@ -480,7 +483,11 @@
     var name = item.name;
     if (item.durationMin != null) name += " · " + trimNum(item.durationMin) + " min";
     head.appendChild(node("span", "", name));
-    head.appendChild(node("span", "kcal", item.kcal > 0 ? fmt(item.kcal) + " kcal logged" : ""));
+    head.appendChild(node(
+      "span",
+      "kcal",
+      item.kcal > 0 ? (item.logged ? fmt(item.kcal) + " kcal" : "about " + fmt(item.kcal) + " kcal") : ""
+    ));
     wrap.appendChild(head);
     return wrap;
   }
@@ -512,7 +519,8 @@
     stats.appendChild(stat("Eaten", fmt(row.intake) + " kcal"));
     stats.appendChild(stat(
       typeLabel(row.type) + " target",
-      fmt(row.targets.calories) + " kcal · " + fmt(row.targets.carbs) + " g carbs"
+      fmt(row.targets.calories) + " kcal · P " + fmt(row.targets.protein) +
+        " · C " + fmt(row.targets.carbs) + " · F " + fmt(row.targets.fat)
     ));
     stats.appendChild(stat("Burned", row.exercise.mid > 0 ? NutritionCore.formatKcalRange(row.exercise) : "0 kcal"));
     stats.appendChild(stat(
@@ -612,8 +620,10 @@
     els.score.textContent =
       view.active + " active · " + view.rest + " rest · " + view.flagged.length + " left out of averages";
     els.targets.textContent =
-      "Active target " + fmt(train.calories) + " kcal · " + fmt(train.carbs) +
-      " g carbs. Rest target " + fmt(rest.calories) + " kcal · " + fmt(rest.carbs) + " g carbs.";
+      "Active target " + fmt(train.calories) + " kcal · P " + fmt(train.protein) +
+      " · C " + fmt(train.carbs) + " · F " + fmt(train.fat) +
+      ". Rest target " + fmt(rest.calories) + " kcal · P " + fmt(rest.protein) +
+      " · C " + fmt(rest.carbs) + " · F " + fmt(rest.fat) + ".";
 
     els.range.textContent = "";
     RANGES.forEach(function (days) {

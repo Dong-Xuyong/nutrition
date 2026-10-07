@@ -187,10 +187,19 @@ header [data-dong-theme-toggle] {
   margin: 0 0 12px;
 }
 
-.card h3 {
+.card h3,
+.card > summary {
   margin: 0 0 10px;
   font-size: 0.95rem;
   font-weight: 700;
+}
+
+.card > summary {
+  cursor: pointer;
+}
+
+.card:not([open]) > summary {
+  margin-bottom: 0;
 }
 
 .card.empty {
